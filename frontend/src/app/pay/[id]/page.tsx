@@ -1,52 +1,39 @@
 "use client";
-import { useEffect, useState } from "react";
+import React, { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import BN from "bn.js";
 import { useAnchorProgram } from "@/lib/program";
-import {
-  getConfigPda,
-  getPaymentLinkPda,
-  getEscrowVaultPda,
-  decodeLinkParam,
-} from "@/lib/pdas";
+import { getConfigPda, getPaymentLinkPda, getEscrowVaultPda, decodeLinkParam } from "@/lib/pdas";
 import { USDC_MINT, lamportsToUsdc } from "@/lib/constants";
+import { Icon, ChainGlyph, VeloraMark, StatusDot } from "@/components/ui";
 import type { PaymentLinkAccount } from "@/lib/idl";
-
-type PageProps = { params: Promise<{ id: string }> };
 
 type LinkStatus = "loading" | "not_found" | "active" | "paid" | "settled";
 
-export default function PayPage({ params }: PageProps) {
-  const [id, setId] = useState<string | null>(null);
+export default function PayPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
   const [link, setLink] = useState<PaymentLinkAccount | null>(null);
   const [status, setStatus] = useState<LinkStatus>("loading");
   const [paying, setPaying] = useState(false);
   const [txSig, setTxSig] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showChains, setShowChains] = useState(false);
 
   const { publicKey } = useWallet();
   const { connection } = useConnection();
   const program = useAnchorProgram();
 
-  // Unwrap async params (Next.js 15 App Router)
-  useEffect(() => {
-    params.then((p) => setId(p.id));
-  }, [params]);
-
-  // Fetch payment link account from Solana
   useEffect(() => {
     if (!id || !program) return;
-
-    async function fetchLink() {
+    (async () => {
       try {
-        const { seller, linkId } = decodeLinkParam(id!);
+        const { seller, linkId } = decodeLinkParam(id);
         const [pda] = getPaymentLinkPda(seller, linkId);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = await (program!.account as any).paymentLink.fetch(pda);
+        const data = await (program.account as any).paymentLink.fetch(pda);
         setLink(data);
         if (data.isSettled) setStatus("settled");
         else if (data.isPaid) setStatus("paid");
@@ -54,56 +41,28 @@ export default function PayPage({ params }: PageProps) {
       } catch {
         setStatus("not_found");
       }
-    }
-
-    fetchLink();
+    })();
   }, [id, program]);
 
   async function handlePay() {
     if (!id || !program || !publicKey || !link) return;
     setError(null);
     setPaying(true);
-
     try {
       const { seller, linkId } = decodeLinkParam(id);
       const [configPda] = getConfigPda(seller);
       const [paymentLinkPda] = getPaymentLinkPda(seller, linkId);
       const [escrowVaultPda] = getEscrowVaultPda(seller, linkId);
-
-      // Buyer's USDC associated token account
       const buyerToken = getAssociatedTokenAddressSync(USDC_MINT, publicKey);
-
-      // Check buyer has enough USDC
       const tokenAcc = await connection.getTokenAccountBalance(buyerToken);
-      const required = link.amount;
-      if (BigInt(tokenAcc.value.amount) < BigInt(required.toString())) {
-        throw new Error(
-          `Insufficient USDC. Need ${lamportsToUsdc(
-            required.toNumber()
-          )} but have ${tokenAcc.value.uiAmount}`
-        );
+      if (BigInt(tokenAcc.value.amount) < BigInt(link.amount.toString())) {
+        throw new Error(`Need ${lamportsToUsdc(link.amount.toNumber())} USDC but have ${tokenAcc.value.uiAmount}`);
       }
-
-      const sig = await program.methods
-        .pay()
-        .accounts({
-          config: configPda,
-          paymentLink: paymentLinkPda,
-          escrowVault: escrowVaultPda,
-          buyerToken,
-          buyer: publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
-
+      const sig = await program.methods.pay().accounts({ config: configPda, paymentLink: paymentLinkPda, escrowVault: escrowVaultPda, buyerToken, buyer: publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
       setTxSig(sig);
       setStatus("paid");
-
-      // Re-fetch to sync on-chain state
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const updated = await (program.account as any).paymentLink.fetch(
-        paymentLinkPda
-      );
+      const updated = await (program.account as any).paymentLink.fetch(paymentLinkPda);
       setLink(updated);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -112,143 +71,142 @@ export default function PayPage({ params }: PageProps) {
     }
   }
 
-  // ── Derived display values ──
   const amountUsdc = link ? lamportsToUsdc(link.amount.toNumber()) : 0;
-  const sellerShort = link
-    ? `${link.seller.toBase58().slice(0, 6)}…${link.seller.toBase58().slice(-4)}`
-    : "";
+  const sellerShort = link ? `${link.seller.toBase58().slice(0, 6)}…${link.seller.toBase58().slice(-4)}` : "";
 
-  // ── Render states ──
-  if (status === "loading") {
-    return <Screen><p className="text-gray-400 animate-pulse">Cargando link…</p></Screen>;
-  }
+  const cardStyle: React.CSSProperties = { width: "100%", maxWidth: 460, borderRadius: "var(--radius-xl)", background: "linear-gradient(180deg, oklch(0.22 0.014 255 / 0.92), oklch(0.17 0.012 255 / 0.92))", border: "1px solid oklch(1 0 0 / 0.10)", boxShadow: "0 30px 80px -20px oklch(0 0 0 / 0.6)", backdropFilter: "blur(20px)", overflow: "hidden", color: "var(--ink)" };
 
-  if (status === "not_found") {
-    return (
-      <Screen>
-        <p className="text-red-400 text-lg font-medium">Link no encontrado</p>
-        <p className="text-gray-500 text-sm">
-          Este link no existe o ya fue cancelado.
-        </p>
-      </Screen>
-    );
-  }
+  if (status === "loading") return (
+    <Centered><div className="acid-pulse" style={{ width: 48, height: 48, borderRadius: "50%", background: "oklch(0.92 0.24 145 / 0.15)", border: "1px solid oklch(0.92 0.24 145 / 0.5)", display: "grid", placeItems: "center", color: "var(--acid)" }}><Icon name="bolt" size={22} /></div><p style={{ color: "var(--ink-3)" }}>Loading payment link…</p></Centered>
+  );
 
-  if (status === "settled") {
-    return (
-      <Screen>
-        <div className="text-green-400 text-5xl">✓</div>
-        <p className="text-2xl font-bold">Pago completado</p>
-        <p className="text-gray-400">
-          ${amountUsdc} USDC ya fueron enviados a {sellerShort}
-        </p>
-      </Screen>
-    );
-  }
+  if (status === "not_found") return (
+    <Centered>
+      <div style={cardStyle}>
+        <div style={{ padding: "32px 28px", textAlign: "center" }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔗</div>
+          <div style={{ fontSize: 20, fontWeight: 500 }}>Link not found</div>
+          <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 8, lineHeight: 1.5 }}>This payment link doesn't exist or has been cancelled.</div>
+          <Link href="/" style={{ display: "inline-flex", alignItems: "center", gap: 8, marginTop: 20, height: 44, padding: "0 18px", borderRadius: 999, background: "oklch(1 0 0 / 0.06)", border: "1px solid oklch(1 0 0 / 0.10)", color: "var(--ink)", textDecoration: "none", fontSize: 13 }}>← Back to PayLink</Link>
+        </div>
+      </div>
+    </Centered>
+  );
 
-  if (status === "paid") {
-    return (
-      <Screen>
-        <div className="text-yellow-400 text-5xl">⏳</div>
-        <p className="text-2xl font-bold">Pago recibido</p>
-        <p className="text-gray-400 text-sm">
-          Los fondos están en escrow. El vendedor va a liquidar en breve.
-        </p>
-        {txSig && (
-          <a
-            href={`https://explorer.solana.com/tx/${txSig}?cluster=devnet`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-green-400 text-xs font-mono hover:underline"
-          >
-            Ver tx en Explorer ↗
-          </a>
-        )}
-      </Screen>
-    );
-  }
+  if (status === "settled") return (
+    <Centered>
+      <div style={cardStyle}>
+        <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid oklch(1 0 0 / 0.06)" }}>
+          <VeloraMark size={20} withText={false} />
+          <span className="chip chip-acid" style={{ fontSize: 10 }}><StatusDot size={6} /> Settled</span>
+        </div>
+        <div style={{ padding: "32px 28px", textAlign: "center" }}>
+          <div style={{ margin: "0 auto 16px", width: 72, height: 72, borderRadius: "50%", background: "oklch(0.92 0.24 145 / 0.15)", border: "1px solid oklch(0.92 0.24 145 / 0.5)", display: "grid", placeItems: "center", boxShadow: "0 0 40px oklch(0.92 0.24 145 / 0.5)" }}><Icon name="check" size={32} stroke="var(--acid)" /></div>
+          <div style={{ fontSize: 20, fontWeight: 500 }}>Payment settled</div>
+          <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6 }}><span style={{ fontFamily: "var(--font-mono), monospace" }}>{amountUsdc} USDC</span> sent to {sellerShort}</div>
+        </div>
+      </div>
+    </Centered>
+  );
 
-  // status === "active"
+  if (status === "paid") return (
+    <Centered>
+      <div style={cardStyle}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid oklch(1 0 0 / 0.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <VeloraMark size={20} withText={false} />
+          <span className="chip chip-amber" style={{ fontSize: 10 }}>⏳ In escrow</span>
+        </div>
+        <div style={{ padding: "32px 28px", textAlign: "center" }}>
+          <div style={{ fontSize: 20, fontWeight: 500 }}>Payment in escrow</div>
+          <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 8, lineHeight: 1.5 }}>Funds are held on-chain. The seller will settle shortly.</div>
+          {txSig && <a href={`https://explorer.solana.com/tx/${txSig}?cluster=devnet`} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 16, fontSize: 12, color: "var(--acid)", fontFamily: "var(--font-mono), monospace" }}>View tx on Solana Explorer ↗</a>}
+        </div>
+      </div>
+    </Centered>
+  );
+
+  // Active — main payment UI
   return (
-    <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4">
-      <div className="max-w-lg w-full space-y-6">
-        {/* Link ID breadcrumb */}
-        <p className="text-gray-500 text-sm font-mono text-center">
-          paylink / {id?.slice(0, 12)}…
-        </p>
+    <div style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 16px", position: "relative" }}>
+      {/* Background glow */}
+      <div style={{ position: "fixed", top: "30%", left: "50%", transform: "translate(-50%,-50%)", width: 600, height: 600, borderRadius: "50%", background: "radial-gradient(circle, oklch(0.92 0.24 145 / 0.15), transparent 60%)", filter: "blur(60px)", pointerEvents: "none" }} />
 
-        {/* Payment card */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
-          <div className="flex justify-between items-center">
-            <span className="text-gray-400">Para</span>
-            <span className="font-mono text-sm">{sellerShort}</span>
+      <div style={{ ...cardStyle, position: "relative", zIndex: 2 }}>
+        {/* Header */}
+        <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid oklch(1 0 0 / 0.06)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <VeloraMark size={20} withText={false} />
+            <div><div style={{ fontSize: 12, color: "var(--ink-3)" }}>Pay to</div><div style={{ fontSize: 13, fontWeight: 500, fontFamily: "var(--font-mono), monospace" }}>{sellerShort}</div></div>
           </div>
-          <div className="flex justify-between items-center">
-            <span className="text-gray-400">Monto</span>
-            <span className="text-3xl font-bold text-green-400">
-              ${amountUsdc} USDC
-            </span>
+          <span className="chip chip-acid" style={{ fontSize: 10 }}><StatusDot size={6} /> Secure · Solana</span>
+        </div>
+
+        {/* Amount */}
+        <div style={{ padding: "28px 24px 20px", textAlign: "center" }}>
+          <div style={{ fontSize: 11, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: ".08em" }}>Amount due</div>
+          <div style={{ marginTop: 6, fontSize: 52, fontWeight: 500, letterSpacing: "-0.03em", fontFamily: "var(--font-mono), monospace" }}>
+            ${Math.floor(amountUsdc)}<span style={{ color: "var(--ink-3)" }}>.{String(amountUsdc.toFixed(2)).split(".")[1]}</span>
           </div>
-          {link?.description && (
-            <div className="flex justify-between items-center">
-              <span className="text-gray-400">Concepto</span>
-              <span className="text-sm">{link.description}</span>
-            </div>
-          )}
-          <div className="flex justify-between items-center">
-            <span className="text-gray-400">Recibe en</span>
-            <span className="text-sm">Solana</span>
-          </div>
-          <div className="border-t border-gray-800 pt-4">
-            <p className="text-gray-500 text-sm text-center">
-              Necesitás USDC en Solana devnet para pagar
-            </p>
+          {link?.description && <div style={{ fontSize: 13, color: "var(--ink-2)", marginTop: 6 }}>{link.description}</div>}
+        </div>
+
+        {/* Chain selector */}
+        <div style={{ padding: "0 20px 4px" }}>
+          <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 8 }}>Pay from</div>
+          <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
+            {[{ id: "sol", name: "Solana", note: "direct" }, { id: "eth", name: "Ethereum", note: "via LI.FI" }, { id: "base", name: "Base", note: "via LI.FI" }, { id: "arb", name: "Arbitrum", note: "via LI.FI" }].map((c, i) => (
+              <button key={c.id} onClick={() => setShowChains(false)} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 12px", borderRadius: 999, border: i === 0 ? "1px solid oklch(0.92 0.24 145 / 0.5)" : "1px solid oklch(1 0 0 / 0.08)", background: i === 0 ? "oklch(0.92 0.24 145 / 0.10)" : "oklch(1 0 0 / 0.03)", color: i === 0 ? "var(--acid)" : "var(--ink-2)", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
+                <ChainGlyph chain={c.id} size={14} />{c.name} <span style={{ fontSize: 10, opacity: 0.6 }}>· {c.note}</span>
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Wallet + Pay */}
-        {!publicKey ? (
-          <div className="flex flex-col items-center gap-3">
-            <p className="text-gray-400 text-sm">
-              Conectá tu wallet para pagar
-            </p>
-            <WalletMultiButton />
+        {/* Route info */}
+        <div style={{ margin: "12px 20px", padding: "10px 12px", borderRadius: 12, background: "oklch(0.72 0.18 295 / 0.06)", border: "1px solid oklch(0.72 0.18 295 / 0.20)", display: "flex", alignItems: "center", gap: 10 }}>
+          <Icon name="route" size={16} stroke="var(--violet)" />
+          <div style={{ fontSize: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>USDC <Icon name="arrow" size={11} stroke="var(--ink-3)" /> <span style={{ color: "var(--acid)" }}>Solana escrow</span></div>
+            <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 2, fontFamily: "var(--font-mono), monospace" }}>Anchor program · non-custodial · &lt;5s</div>
           </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-400">Wallet conectada</span>
+        </div>
+
+        {/* Wallet + Pay button */}
+        <div style={{ padding: "4px 20px 20px" }}>
+          {!publicKey ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "8px 0" }}>
+              <div style={{ fontSize: 13, color: "var(--ink-2)" }}>Connect your Solana wallet to pay</div>
               <WalletMultiButton />
             </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "var(--ink-3)" }}>
+                <span style={{ fontFamily: "var(--font-mono), monospace" }}>{publicKey.toBase58().slice(0, 8)}…</span>
+                <WalletMultiButton />
+              </div>
+              {error && <div style={{ background: "oklch(0.78 0.16 25 / 0.10)", border: "1px solid oklch(0.78 0.16 25 / 0.25)", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "var(--rose)" }}>{error}</div>}
+              <button onClick={handlePay} disabled={paying} style={{ height: 52, borderRadius: 14, background: "var(--acid)", color: "#0a0c0a", border: "none", fontWeight: 600, fontSize: 15, cursor: paying ? "not-allowed" : "pointer", opacity: paying ? 0.7 : 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 12px 28px -10px var(--acid-glow)" }}>
+                {paying ? "Sending to escrow…" : <><Icon name="bolt" size={18} stroke="#0a0c0a" /> Pay ${amountUsdc} USDC</>}
+              </button>
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 14, fontSize: 10.5, color: "var(--ink-3)" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="lock" size={11} /> Non-custodial</span>
+                <span>·</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>Network fee <span style={{ color: "var(--acid)", fontFamily: "var(--font-mono), monospace" }}>~$0.0008</span></span>
+              </div>
+            </div>
+          )}
+        </div>
 
-            {error && (
-              <p className="text-red-400 text-sm bg-red-400/10 rounded-xl px-4 py-3">
-                {error}
-              </p>
-            )}
-
-            <button
-              onClick={handlePay}
-              disabled={paying}
-              className="w-full bg-green-400 text-black font-bold py-4 rounded-xl text-lg hover:bg-green-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {paying ? "Enviando a escrow…" : `Pagar $${amountUsdc} USDC`}
-            </button>
-          </div>
-        )}
-
-        <p className="text-center text-gray-600 text-xs">
-          Powered by Solana · Escrow on-chain · PayLink
-        </p>
+        {/* Footer */}
+        <div style={{ padding: "10px 20px", borderTop: "1px solid oklch(1 0 0 / 0.06)", fontSize: 10.5, color: "var(--ink-3)", display: "flex", justifyContent: "space-between" }}>
+          <span>Powered by PayLink · Anchor escrow on Solana</span>
+          <span style={{ fontFamily: "var(--font-mono), monospace" }}>paylink.xyz</span>
+        </div>
       </div>
-    </main>
+    </div>
   );
 }
 
-function Screen({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4 gap-4 text-center">
-      {children}
-    </main>
-  );
+function Centered({ children }: { children: React.ReactNode }) {
+  return <div style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, padding: 24 }}>{children}</div>;
 }

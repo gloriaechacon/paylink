@@ -12,18 +12,28 @@ export function Aurora({ intensity = 0.7 }: { intensity?: number }) {
 }
 
 export function Particles({ count = 28, intensity = 1 }: { count?: number; intensity?: number }) {
-  const dots = React.useMemo(() =>
-    Array.from({ length: count }).map((_, i) => ({
-      id: i,
-      left: Math.random() * 100,
-      top: Math.random() * 100,
-      size: 1 + Math.random() * 2.5,
-      delay: -Math.random() * 14,
-      duration: 10 + Math.random() * 14,
-      xDrift: (Math.random() - 0.5) * 60,
-      hue: Math.random() < 0.6 ? 145 : Math.random() < 0.5 ? 215 : 295,
-      opacity: (0.3 + Math.random() * 0.6) * intensity,
-    })), [count, intensity]);
+  // State starts empty so server HTML is blank; dots are added after mount
+  // to avoid SSR/hydration mismatch from Math.random()
+  const [dots, setDots] = React.useState<
+    { id: number; left: number; top: number; size: number; delay: number; duration: number; xDrift: number; hue: number; opacity: number }[]
+  >([]);
+
+  React.useEffect(() => {
+    setDots(
+      Array.from({ length: count }).map((_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        top: Math.random() * 100,
+        size: 1 + Math.random() * 2.5,
+        delay: -Math.random() * 14,
+        duration: 10 + Math.random() * 14,
+        xDrift: (Math.random() - 0.5) * 60,
+        hue: Math.random() < 0.6 ? 145 : Math.random() < 0.5 ? 215 : 295,
+        opacity: (0.3 + Math.random() * 0.6) * intensity,
+      }))
+    );
+  }, [count, intensity]);
+
   return (
     <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" }}>
       {dots.map((d) => (

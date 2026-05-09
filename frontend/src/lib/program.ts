@@ -21,8 +21,12 @@ export function useAnchorProgram() {
       },
       { commitment: "confirmed" }
     );
-    // IDL.address carries the program ID in Anchor 0.31
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return new Program(IDL as any, provider);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return new Program(IDL as any, provider);
+    } catch (e) {
+      console.warn("Anchor Program init failed (expected until deployed):", e);
+      return null;
+    }
   }, [connection, wallet.publicKey, wallet.signTransaction, wallet.signAllTransactions]);
 }
